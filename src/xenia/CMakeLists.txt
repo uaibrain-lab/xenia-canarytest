@@ -52,3 +52,10 @@ if(WIN32)
   add_subdirectory(hid/xinput)
   add_subdirectory(ui/d3d12)
 endif()
+
+# launcheruwp integration (unified launcher: emulated + recompiled games,
+# portal upload contract). Off by default so regular builds are unaffected.
+option(XENIA_BUILD_LAUNCHER "Build the launcheruwp integration layer" OFF)
+if(XENIA_BUILD_LAUNCHER)
+  add_subdirectory(launcher)
+endif()
