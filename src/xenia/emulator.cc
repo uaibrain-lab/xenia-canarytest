@@ -112,7 +112,8 @@ Emulator::GameConfigLoadCallback::~GameConfigLoadCallback() {
 Emulator::Emulator(const std::filesystem::path& command_line,
                    const std::filesystem::path& storage_root,
                    const std::filesystem::path& content_root,
-                   const std::filesystem::path& cache_root)
+                   const std::filesystem::path& cache_root,
+                   bool embedded_host)
     : on_launch(),
       on_terminate(),
       on_exit(),
@@ -137,7 +138,7 @@ Emulator::Emulator(const std::filesystem::path& command_line,
       paused_(false),
       restoring_(false),
       restore_fence_() {
-  if (cvars::priority_class != 0) {
+  if (!embedded_host && cvars::priority_class != 0) {
     if (SetProcessPriorityClass(cvars::priority_class)) {
       XELOGI("Higher priority class request: Successful. New priority: {}",
              cvars::priority_class);
@@ -145,6 +146,9 @@ Emulator::Emulator(const std::filesystem::path& command_line,
   }
 
 #if XE_PLATFORM_WIN32 == 1
+  // An embedded host owns its own UI and process policy.
+  // Standalone retains the original first-run notification.
+  if (embedded_host) return;
   // Show a disclaimer that links to the quickstart
   // guide the first time they ever open the emulator
   uint64_t persistent_flags = GetPersistentEmulatorFlags();

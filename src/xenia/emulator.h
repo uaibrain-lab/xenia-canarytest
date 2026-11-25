@@ -99,7 +99,8 @@ class Emulator {
   explicit Emulator(const std::filesystem::path& command_line,
                     const std::filesystem::path& storage_root,
                     const std::filesystem::path& content_root,
-                    const std::filesystem::path& cache_root);
+                    const std::filesystem::path& cache_root,
+                    bool embedded_host = false);
   ~Emulator();
 
   // Full command line used when launching the process.

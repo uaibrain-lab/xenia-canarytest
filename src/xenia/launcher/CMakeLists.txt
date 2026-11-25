@@ -19,8 +19,17 @@ target_link_libraries(xenia-launcher-xenia-backend PUBLIC
   xenia-core
 )
 if(WIN32)
-  target_sources(xenia-launcher-xenia-backend PRIVATE embedded_core_window.h)
-  target_link_libraries(xenia-launcher-xenia-backend PUBLIC xenia-ui)
+  target_sources(xenia-launcher-xenia-backend PRIVATE
+    embedded_core_window.h embedded_xenia_runtime.h embedded_xenia_runtime.cc)
+  target_link_libraries(xenia-launcher-xenia-backend PUBLIC
+    xenia-ui xenia-apu-xaudio2 xenia-gpu-d3d12 xenia-hid-xinput xenia-ui-d3d12
+    xenia-apu xenia-cpu xenia-gpu xenia-hid xenia-kernel xenia-patcher xenia-vfs
+  )
+  if(XE_TARGET_X86_64)
+    target_link_libraries(xenia-launcher-xenia-backend PUBLIC xenia-cpu-backend-x64)
+  elseif(XE_TARGET_AARCH64)
+    target_link_libraries(xenia-launcher-xenia-backend PUBLIC xenia-cpu-backend-a64)
+  endif()
 endif()
 xe_target_defaults(xenia-launcher-xenia-backend)
 
