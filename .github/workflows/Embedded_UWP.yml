@@ -1,0 +1,107 @@
+name: Embedded Xenia UWP development build
+
+on:
+  push:
+    branches: [feature/launcheruwp-integration]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: embedded-xenia-uwp-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  embedded:
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 90
+    env:
+      POWERSHELL_TELEMETRY_OPTOUT: 1
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Cache Vulkan SDK
+        id: cache-vulkan-sdk
+        uses: actions/cache@v6
+        with:
+          path: C:\VulkanSDK
+          key: ${{ runner.os }}-vulkan-sdk-${{ hashFiles('**/vulkan-sdk.exe') }}
+          restore-keys: ${{ runner.os }}-vulkan-sdk-
+
+      - name: Install Vulkan SDK with spirv-tools
+        run: |-
+          if (Test-Path "C:\VulkanSDK") {
+            echo "Vulkan SDK found in cache."
+          } else {
+            Invoke-WebRequest -Uri "https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe" -OutFile "vulkan-sdk.exe"
+            Start-Process -FilePath "vulkan-sdk.exe" -ArgumentList "--accept-licenses", "--default-answer", "--confirm-command", "install" -NoNewWindow -Wait
+          }
+          $env:VULKAN_SDK = "C:\VulkanSDK\$(Get-ChildItem -Path 'C:\VulkanSDK' -Directory | Select-Object -First 1 -ExpandProperty Name)"
+          $env:PATH += "${env:VULKAN_SDK}\Bin"
+          echo "VULKAN_SDK=$env:VULKAN_SDK" >> $env:GITHUB_ENV
+          echo "${env:VULKAN_SDK}\Bin" >> $env:GITHUB_PATH
+
+          # Verify shader tools are available
+          foreach ($tool in @("glslangValidator", "spirv-opt", "spirv-dis")) {
+            $toolPath = "${env:VULKAN_SDK}\Bin\${tool}.exe"
+            if (Test-Path "$toolPath") {
+              echo "$tool found at: $toolPath"
+              & $toolPath --version 2>$null
+            } else {
+              echo "Warning: ${tool}.exe not found at expected location"
+            }
+          }
+
+          # Verify FXC is available (from Windows SDK)
+          $fxcPaths = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\fxc.exe" -ErrorAction SilentlyContinue | Sort-Object FullName
+          if ($fxcPaths) {
+            $fxcPath = $fxcPaths[-1].FullName
+            echo "FXC found at: $fxcPath"
+          } else {
+            echo "Warning: fxc.exe not found in Windows SDK"
+          }
+
+      - name: Download submodules
+        run: |- # Exclude unneeded submodules
+          $SUBMODULES=(Select-String -CaseSensitive '(?<=path = )(?!third_party\/xbyak_aarch64).+' .gitmodules).Matches.Value
+          git submodule update --init --depth=1 -j $env:NUMBER_OF_PROCESSORS $SUBMODULES
+
+      - name: Configure WindowsStore x64
+        run: |
+          cmake -S . -B build-embedded-uwp -G "Visual Studio 18 2026" -A x64 -DCMAKE_SYSTEM_NAME=WindowsStore -DCMAKE_SYSTEM_VERSION=10.0 -DXENIA_BUILD_LAUNCHER=ON -DXENIA_BUILD_EMBEDDED_UWP=ON
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build embedded engine
+        run: |
+          cmake --build build-embedded-uwp --config Release --target uaibrain_xenia_embedded --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify ABI exports
+        run: |
+          $dll = "build-embedded-uwp/embedded-xenia/Release/uaibrain_xenia_embedded.dll"
+          if (!(Test-Path $dll)) { throw "Embedded DLL missing" }
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Sort-Object FullName | Select-Object -Last 1
+          if (!$dumpbin) { throw "dumpbin unavailable" }
+          $exports = & $dumpbin.FullName /exports $dll | Out-String
+          if ($LASTEXITCODE -ne 0) { throw "dumpbin failed" }
+          foreach ($name in @("abi", "create", "boot", "tick", "release")) {
+            if ($exports -notmatch "uaibrain_xenia_core_${name}_v1") { throw "Missing export: $name" }
+          }
+          Copy-Item LICENSE build-embedded-uwp/embedded-xenia/Release/LICENSE
+          git rev-parse HEAD | Set-Content build-embedded-uwp/embedded-xenia/Release/source-revision.txt
+
+      - name: Upload development DLL only
+        uses: actions/upload-artifact@v7
+        with:
+          name: embedded-xenia-uwp-x64
+          path: |
+            build-embedded-uwp/embedded-xenia/Release/*.dll
+            build-embedded-uwp/embedded-xenia/Release/LICENSE
+            build-embedded-uwp/embedded-xenia/Release/source-revision.txt
+          if-no-files-found: error
+          retention-days: 7
