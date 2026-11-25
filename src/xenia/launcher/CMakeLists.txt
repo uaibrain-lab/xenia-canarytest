@@ -18,6 +18,10 @@ target_link_libraries(xenia-launcher-xenia-backend PUBLIC
   xenia-launcher-core
   xenia-core
 )
+if(WIN32)
+  target_sources(xenia-launcher-xenia-backend PRIVATE embedded_core_window.h)
+  target_link_libraries(xenia-launcher-xenia-backend PUBLIC xenia-ui)
+endif()
 xe_target_defaults(xenia-launcher-xenia-backend)
 
 if(XENIA_BUILD_TESTS)

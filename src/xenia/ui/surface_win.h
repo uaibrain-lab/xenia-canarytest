@@ -17,9 +17,31 @@
 
 // Must be included before Windows headers for things like NOMINMAX.
 #include "xenia/base/platform_win.h"
+#include <wrl/client.h>
 
 namespace xe {
 namespace ui {
+
+// The host owns the CoreWindow and provides current physical pixel dimensions.
+// A COM reference keeps the borrowed identity alive for the surface lifetime.
+class WinCoreWindowSurface final : public Surface {
+ public:
+  WinCoreWindowSurface(IUnknown* window, const uint32_t& width,
+                       const uint32_t& height)
+      : window_(window), width_(width), height_(height) {}
+  TypeIndex GetType() const override { return kTypeIndex_WinCoreWindow; }
+  IUnknown* core_window() const { return window_.Get(); }
+ protected:
+  bool GetSizeImpl(uint32_t& width_out, uint32_t& height_out) const override {
+    width_out = width_;
+    height_out = height_;
+    return window_.Get() != nullptr;
+  }
+ private:
+  Microsoft::WRL::ComPtr<IUnknown> window_;
+  const uint32_t& width_;
+  const uint32_t& height_;
+};
 
 #if WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_DESKTOP | WINAPI_PARTITION_GAMES)
 class Win32HwndSurface final : public Surface {

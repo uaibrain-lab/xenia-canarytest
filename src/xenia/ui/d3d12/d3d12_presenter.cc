@@ -62,7 +62,7 @@ D3D12Presenter::~D3D12Presenter() {
 }
 
 Surface::TypeFlags D3D12Presenter::GetSupportedSurfaceTypes() const {
-  Surface::TypeFlags types = 0;
+  Surface::TypeFlags types = Surface::kTypeFlag_WinCoreWindow;
 #if WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_DESKTOP | WINAPI_PARTITION_GAMES)
   types |= Surface::kTypeFlag_Win32Hwnd;
 #endif
@@ -275,6 +275,7 @@ D3D12Presenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(
   if (!paint_context_.swap_chain) {
     // Create a new swap chain.
     Surface::TypeIndex surface_type = new_surface.GetType();
+    const bool core_window = surface_type == Surface::kTypeIndex_WinCoreWindow;
     DXGI_SWAP_CHAIN_DESC1 swap_chain_desc;
     swap_chain_desc.Width = UINT(new_swap_chain_width);
     swap_chain_desc.Height = UINT(new_swap_chain_height);
@@ -296,7 +297,7 @@ D3D12Presenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(
     swap_chain_desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     swap_chain_desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
     swap_chain_desc.Flags = 0;
-    if (cvars::d3d12_allow_variable_refresh_rate_and_tearing &&
+    if (!core_window && cvars::d3d12_allow_variable_refresh_rate_and_tearing &&
         dxgi_supports_tearing_) {
       // Allow tearing in borderless fullscreen to support variable refresh
       // rate.
@@ -306,6 +307,17 @@ D3D12Presenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(
     ID3D12CommandQueue* direct_queue = provider_.GetDirectQueue();
     Microsoft::WRL::ComPtr<IDXGISwapChain1> swap_chain_1;
     switch (surface_type) {
+      case Surface::kTypeIndex_WinCoreWindow: {
+        swap_chain_desc.Scaling = DXGI_SCALING_STRETCH;
+        swap_chain_desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+        auto* window = static_cast<const WinCoreWindowSurface&>(new_surface).core_window();
+        if (!window || FAILED(dxgi_factory->CreateSwapChainForCoreWindow(
+                           direct_queue, window, &swap_chain_desc, nullptr,
+                           &swap_chain_1))) {
+          XELOGE("D3D12Presenter: Failed to create a CoreWindow swap chain");
+          return SurfacePaintConnectResult::kFailure;
+        }
+      } break;
 #if WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_DESKTOP | WINAPI_PARTITION_GAMES)
       case Surface::kTypeIndex_Win32Hwnd: {
         HWND surface_hwnd =
@@ -342,6 +354,7 @@ D3D12Presenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(
     // before returning.
     paint_context_.swap_chain_width = new_swap_chain_width;
     paint_context_.swap_chain_height = new_swap_chain_height;
+    paint_context_.swap_chain_core_window = core_window;
     paint_context_.swap_chain_allows_tearing =
         (swap_chain_desc.Flags & DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING) != 0;
     for (uint32_t i = 0; i < PaintContext::kSwapChainBufferCount; ++i) {
@@ -456,6 +469,7 @@ void D3D12Presenter::PaintContext::DestroySwapChain() {
   }
   swap_chain.Reset();
   swap_chain_allows_tearing = false;
+  swap_chain_core_window = false;
   swap_chain_height = 0;
   swap_chain_width = 0;
 }
@@ -1118,9 +1132,10 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
   // fullscreen, but DXGI fullscreen is largely unneeded with the flip
   // presentation model used in Direct3D 12).
   HRESULT present_result = paint_context_.swap_chain->Present(
-      0, DXGI_PRESENT_RESTART | (paint_context_.swap_chain_allows_tearing
-                                     ? DXGI_PRESENT_ALLOW_TEARING
-                                     : 0));
+      paint_context_.swap_chain_core_window ? 1 : 0,
+      paint_context_.swap_chain_core_window ? 0 :
+          (DXGI_PRESENT_RESTART | (paint_context_.swap_chain_allows_tearing
+                                       ? DXGI_PRESENT_ALLOW_TEARING : 0)));
   // Even if presentation has failed, work might have been enqueued anyway
   // internally before the failure according to Jesse Natalie from the DirectX
   // Discord server.

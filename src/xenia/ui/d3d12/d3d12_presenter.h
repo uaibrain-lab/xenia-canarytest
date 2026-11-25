@@ -280,6 +280,7 @@ class D3D12Presenter final : public Presenter {
     uint32_t swap_chain_width = 0;
     uint32_t swap_chain_height = 0;
     bool swap_chain_allows_tearing = false;
+    bool swap_chain_core_window = false;
     Microsoft::WRL::ComPtr<IDXGISwapChain3> swap_chain;
     std::array<Microsoft::WRL::ComPtr<ID3D12Resource>, kSwapChainBufferCount>
         swap_chain_buffers;
