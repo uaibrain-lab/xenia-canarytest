@@ -31,8 +31,17 @@ class XeniaBackend final : public RuntimeBackend {
   bool IsAvailable(std::string* reason) const override;
   LaunchResult Launch(const LaunchRequest& request) override;
 
+  // Single session per configured emulator: the host must rebuild the
+  // emulator before another launch (guest mounts are not yet reusable).
+  // These methods must run on the owning UI thread. kStopped means the
+  // title has stopped, NOT that GPU/audio or the emulator is released.
+  enum class SessionState { kIdle, kRunning, kStopped, kFailed };
+  SessionState PollSession();
+  bool StopSession();
+
  private:
   xe::Emulator* emulator_;
+  SessionState session_ = SessionState::kIdle;
 };
 
 }  // namespace launcher

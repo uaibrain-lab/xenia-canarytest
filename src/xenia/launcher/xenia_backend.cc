@@ -19,6 +19,12 @@ bool XeniaBackend::IsAvailable(std::string* reason) const {
     }
     return false;
   }
+  if (session_ != SessionState::kIdle) {
+    if (reason) {
+      *reason = "Recrie o runtime Xenia antes de iniciar outro titulo.";
+    }
+    return false;
+  }
   if (emulator_->is_title_open()) {
     if (reason) {
       *reason = "Ja existe um titulo em execucao no Xenia.";
@@ -37,12 +43,53 @@ LaunchResult XeniaBackend::Launch(const LaunchRequest& request) {
   if (!IsAvailable(&reason)) {
     return {false, reason};
   }
+  // Fail closed even if LaunchPath throws after mounting a device.
+  session_ = SessionState::kFailed;
   X_STATUS status = emulator_->LaunchPath(request.path);
   if (status != X_STATUS_SUCCESS) {
     return {false, "Falha ao iniciar o jogo no Xenia (X_STATUS " +
                        std::to_string(static_cast<uint32_t>(status)) + ")."};
   }
+  session_ = SessionState::kRunning;
   return {true, "Jogo iniciado no Xenia."};
+}
+
+XeniaBackend::SessionState XeniaBackend::PollSession() {
+  if (session_ != SessionState::kRunning) {
+    return session_;
+  }
+  switch (emulator_->PollTitleThread()) {
+    case Emulator::TitleThreadState::kRunning:
+      break;
+    case Emulator::TitleThreadState::kExited:
+      StopSession();
+      break;
+    default:
+      session_ = SessionState::kFailed;
+      break;
+  }
+  return session_;
+}
+
+bool XeniaBackend::StopSession() {
+  if (!emulator_ || session_ == SessionState::kIdle) {
+    return false;
+  }
+  if (session_ == SessionState::kStopped) {
+    return true;
+  }
+  // TerminateTitle calls the real guest kernel, releases title objects and
+  // invokes on_terminate. Do not run the standalone WaitUntilExit loop here.
+  session_ = SessionState::kFailed;
+  if (emulator_->is_title_open() &&
+      emulator_->TerminateTitle() != X_STATUS_SUCCESS) {
+    return false;
+  }
+  if (emulator_->PollTitleThread() != Emulator::TitleThreadState::kExited) {
+    return false;
+  }
+  session_ = SessionState::kStopped;
+  return true;
 }
 
 }  // namespace launcher

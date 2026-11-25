@@ -1579,6 +1579,21 @@ bool Emulator::ExceptionCallback(Exception* ex) {
   return false;
 }
 
+Emulator::TitleThreadState Emulator::PollTitleThread() const {
+  if (!main_thread_) {
+    return TitleThreadState::kMissing;
+  }
+  switch (xe::threading::Wait(main_thread_->thread(), false,
+                              std::chrono::milliseconds(0))) {
+    case xe::threading::WaitResult::kSuccess:
+      return TitleThreadState::kExited;
+    case xe::threading::WaitResult::kTimeout:
+      return TitleThreadState::kRunning;
+    default:
+      return TitleThreadState::kWaitFailed;
+  }
+}
+
 void Emulator::WaitUntilExit() {
   while (true) {
     if (main_thread_) {

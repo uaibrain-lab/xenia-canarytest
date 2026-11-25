@@ -315,6 +315,11 @@ class Emulator {
 
   void WaitUntilExit();
 
+  // Nonblocking host-owned session polling. UI thread only; do not use
+  // concurrently with WaitUntilExit or save-state restoration.
+  enum class TitleThreadState { kMissing, kRunning, kExited, kWaitFailed };
+  TitleThreadState PollTitleThread() const;
+
  public:
   xe::Delegate<uint32_t, const std::string_view> on_launch;
   xe::Delegate<bool> on_shader_storage_initialization;
