@@ -36,3 +36,30 @@ xe_target_defaults(xenia-launcher-xenia-backend)
 if(XENIA_BUILD_TESTS)
   add_subdirectory(testing)
 endif()
+
+# The real embedded engine, not a launcher executable. Keep the standalone
+# app and static launcher library unchanged. Use the Store toolchain for
+# the DLL that will be staged into Jadyx's existing package.
+option(XENIA_BUILD_EMBEDDED_UWP "Build the embedded Xenia UWP DLL" OFF)
+if(XENIA_BUILD_EMBEDDED_UWP)
+  if(NOT CMAKE_SYSTEM_NAME STREQUAL "WindowsStore" OR NOT MSVC OR NOT XE_TARGET_X86_64)
+    message(FATAL_ERROR "Embedded Xenia requires MSVC x64 WindowsStore")
+  endif()
+  add_library(uaibrain_xenia_embedded SHARED embedded_xenia_runtime.cc)
+  target_link_libraries(uaibrain_xenia_embedded PRIVATE
+    xenia-launcher-xenia-backend
+    xenia-apu xenia-apu-nop xenia-base xenia-core xenia-cpu
+    xenia-gpu xenia-gpu-null xenia-hid xenia-hid-nop
+    xenia-kernel xenia-patcher xenia-ui xenia-vfs
+    aes_128 capstone fmt dxbc imgui libavcodec libavutil
+    mspack snappy xxhash
+    WindowsApp.lib
+  )
+  target_link_options(uaibrain_xenia_embedded PRIVATE /APPCONTAINER)
+  set_target_properties(uaibrain_xenia_embedded PROPERTIES
+    OUTPUT_NAME uaibrain_xenia_embedded
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/embedded-xenia/$<CONFIG>"
+    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/embedded-xenia/$<CONFIG>"
+  )
+  xe_target_defaults(uaibrain_xenia_embedded)
+endif()
