@@ -47,6 +47,13 @@ LaunchResult EmbeddedXeniaRuntime::Launch(const LaunchRequest& request) {
     std::filesystem::create_directories(content);
     std::filesystem::create_directories(cache);
     if (!window_.Open()) return {false, "Cannot open borrowed CoreWindow."};
+    // InputSystem::Setup does not initialize individual drivers. Prepare the
+    // real driver before creating the guest and fail instead of using nop HID.
+    auto driver = hid::xinput::Create(&window_, 0);
+    if (!driver || driver->Setup() != X_STATUS_SUCCESS) {
+      Shutdown();
+      return {false, "XInput initialization failed."};
+    }
     emulator_ = std::make_unique<Emulator>(
         std::filesystem::path{}, storage_root_, content, cache, true);
     const X_STATUS status = emulator_->Setup(
@@ -55,9 +62,9 @@ LaunchResult EmbeddedXeniaRuntime::Launch(const LaunchRequest& request) {
           return apu::xaudio2::XAudio2AudioSystem::Create(processor);
         },
         [] { return std::make_unique<gpu::d3d12::D3D12GraphicsSystem>(); },
-        [](ui::Window* window) {
+        [&driver](ui::Window*) {
           std::vector<std::unique_ptr<hid::InputDriver>> drivers;
-          drivers.emplace_back(hid::xinput::Create(window, 0));
+          drivers.emplace_back(std::move(driver));
           return drivers;
         });
     if (status != X_STATUS_SUCCESS || !emulator_->graphics_system() ||
