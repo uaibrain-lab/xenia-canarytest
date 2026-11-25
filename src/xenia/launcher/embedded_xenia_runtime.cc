@@ -118,3 +118,74 @@ void EmbeddedXeniaRuntime::ReleaseRuntime() {
 }
 
 }  // namespace xe::launcher
+
+// C ABI for a single-package UWP host. No STL objects or allocations cross
+// the module boundary. The host must invoke every operation on its UI thread,
+// keep the module loaded and relinquish its swap chain before launching.
+// A failed release leaves the handle alive; never resume host presentation.
+extern "C" {
+__declspec(dllexport) uint32_t uaibrain_xenia_core_abi_v1() noexcept {
+  return 1;
+}
+
+__declspec(dllexport) void* uaibrain_xenia_core_create_v1(
+    IUnknown* core_window, uint32_t width, uint32_t height,
+    const wchar_t* storage_root) noexcept {
+  if (!core_window || !width || !height || !storage_root || !*storage_root)
+    return nullptr;
+  try {
+    return new xe::launcher::EmbeddedXeniaRuntime(
+        core_window, width, height, std::filesystem::path(storage_root));
+  } catch (...) {
+    return nullptr;
+  }
+}
+
+__declspec(dllexport) int uaibrain_xenia_core_boot_v1(
+    void* handle, const wchar_t* game_path) noexcept {
+  if (!handle || !game_path || !*game_path) return 0;
+  try {
+    auto* runtime = static_cast<xe::launcher::EmbeddedXeniaRuntime*>(handle);
+    xe::launcher::LaunchRequest request;
+    request.mode = xe::launcher::ExecutionMode::kEmulated;
+    request.target_id = xe::launcher::kXeniaEmulatorId;
+    request.path = std::filesystem::path(game_path);
+    return runtime->Launch(request).started ? 1 : 0;
+  } catch (...) {
+    return 0;
+  }
+}
+
+// Stable C ABI values: 0 idle, 1 running, 2 stopped, -1 failed.
+// Stopped is NOT permission to recreate the host presenter: release first.
+__declspec(dllexport) int uaibrain_xenia_core_tick_v1(
+    void* handle, uint32_t width, uint32_t height, int focused) noexcept {
+  if (!handle) return -1;
+  try {
+    auto* runtime = static_cast<xe::launcher::EmbeddedXeniaRuntime*>(handle);
+    using State = xe::launcher::XeniaBackend::SessionState;
+    switch (runtime->Tick(width, height, focused != 0)) {
+      case State::kIdle: return 0;
+      case State::kRunning: return 1;
+      case State::kStopped: return 2;
+      case State::kFailed: return -1;
+    }
+  } catch (...) {
+    return -1;
+  }
+  return -1;
+}
+
+__declspec(dllexport) int uaibrain_xenia_core_release_v1(
+    void* handle) noexcept {
+  if (!handle) return 1;
+  try {
+    auto* runtime = static_cast<xe::launcher::EmbeddedXeniaRuntime*>(handle);
+    if (!runtime->Shutdown()) return 0;
+    delete runtime;
+    return 1;
+  } catch (...) {
+    return 0;
+  }
+}
+}  // extern "C"
