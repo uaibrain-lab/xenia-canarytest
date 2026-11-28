@@ -47,8 +47,15 @@ template <typename T>
 bool xeXamShowDialog(const std::function<T*()>& create_dialog,
                      std::function<void(T*)> close_callback,
                      xe::threading::Fence* closed_fence = nullptr) {
+  auto* emulator = kernel_state()->emulator();
+  // The embedded runtime has a real presenter but no standalone ImGui drawer.
+  // Never construct a dialog that would dereference that missing drawer.
+  if (!emulator->display_window() || !emulator->imgui_drawer()) {
+    XELOGW("XAM dialog unavailable: no guest UI drawer");
+    return false;
+  }
   xe::ui::WindowedAppContext& app_context =
-      kernel_state()->emulator()->display_window()->app_context();
+      emulator->display_window()->app_context();
 
   return app_context.CallInUIThreadSynchronous([&]() {
     T* dialog = create_dialog();
@@ -100,6 +107,13 @@ X_RESULT xeXamDispatchDialog(std::function<T*()> create_dialog,
 
   if (!shown) {
     kernel_state()->xam_state()->SetUIActive(false);
+    // Complete a supplied overlapped even when the UI cannot be displayed.
+    // Do not fabricate a choice or leave a guest waiting for an event.
+    if (overlapped) {
+      kernel_state()->CompleteOverlappedImmediate(overlapped,
+                                                  X_ERROR_FUNCTION_FAILED);
+      return X_ERROR_IO_PENDING;
+    }
     return X_ERROR_FUNCTION_FAILED;
   }
 
@@ -153,6 +167,13 @@ X_RESULT xeXamDispatchDialogEx(
 
   if (!shown) {
     kernel_state()->xam_state()->SetUIActive(false);
+    // Complete a supplied overlapped even when the UI cannot be displayed.
+    // Do not fabricate a choice or leave a guest waiting for an event.
+    if (overlapped) {
+      kernel_state()->CompleteOverlappedImmediate(overlapped,
+                                                  X_ERROR_FUNCTION_FAILED);
+      return X_ERROR_IO_PENDING;
+    }
     return X_ERROR_FUNCTION_FAILED;
   }
 
@@ -434,8 +455,12 @@ dword_result_t XNotifyQueueUI_entry(dword_t exnq, dword_t dwUserIndex,
   const Emulator* emulator = kernel_state()->emulator();
   xe::ui::ImGuiDrawer* imgui_drawer = emulator->imgui_drawer();
 
-  new xe::ui::XNotifyWindow(imgui_drawer, "", displayText, dwUserIndex,
-                            position_id);
+  if (imgui_drawer) {
+    new xe::ui::XNotifyWindow(imgui_drawer, "", displayText, dwUserIndex,
+                              position_id);
+  }
+  // The notification has already been logged above; no visual notification
+  // can be rendered without the optional guest UI drawer.
 
   // XNotifyQueueUI -> XNotifyQueueUIEx -> XMsgProcessRequest ->
   // XMsgStartIORequestEx & XMsgInProcessCall
@@ -529,6 +554,20 @@ dword_result_t XamShowDeviceSelectorUI_entry(
 
   std::vector<const DummyDeviceInfo*> devices = ListStorageDevices();
 
+  if (!kernel_state()->emulator()->imgui_drawer() && !cvars::headless) {
+    // Embedded host: resolve the configured emulated HDD using the same
+    // default as the existing headless/no-picker path. This is real storage
+    // selection, not a fabricated dialog result. Complete before returning
+    // and do not schedule a detached notification against a dying runtime.
+    X_RESULT result = X_ERROR_CANCELLED;
+    if (!devices.empty()) {
+      *device_id_ptr = static_cast<uint32_t>(devices.front()->device_id);
+      result = X_ERROR_SUCCESS;
+    }
+    kernel_state()->CompleteOverlappedImmediate(overlapped, result);
+    return X_ERROR_IO_PENDING;
+  }
+
   if (cvars::headless || !cvars::storage_selection_dialog) {
     // Default to the first storage device (HDD) if headless.
     return xeXamDispatchHeadless(
@@ -612,13 +651,12 @@ dword_result_t XamShowDirtyDiscErrorUI_entry(dword_t user_index) {
 
   const Emulator* emulator = kernel_state()->emulator();
   xe::ui::ImGuiDrawer* imgui_drawer = emulator->imgui_drawer();
-  xeXamDispatchDialog<ui::MessageBoxDialog>(
+  return xeXamDispatchDialog<ui::MessageBoxDialog>(
       [&]() {
         return new ui::MessageBoxDialog(imgui_drawer, disc_title, disc_desc,
                                         {"OK"}, 0);
       },
       [](ui::MessageBoxDialog*) -> X_RESULT { return X_ERROR_SUCCESS; }, 0);
-  return X_ERROR_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(XamShowDirtyDiscErrorUI, kUI, kStub);
 
@@ -636,13 +674,12 @@ dword_result_t XamShowNuiDirtyDiscErrorUI_entry(dword_t tracking_id) {
 
   const Emulator* emulator = kernel_state()->emulator();
   xe::ui::ImGuiDrawer* imgui_drawer = emulator->imgui_drawer();
-  xeXamDispatchDialog<ui::MessageBoxDialog>(
+  return xeXamDispatchDialog<ui::MessageBoxDialog>(
       [&]() {
         return new ui::MessageBoxDialog(imgui_drawer, disc_title, disc_desc,
                                         {"OK"}, 0);
       },
       [](ui::MessageBoxDialog*) -> X_RESULT { return X_ERROR_SUCCESS; }, 0);
-  return X_ERROR_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(XamShowNuiDirtyDiscErrorUI, kUI, kStub);
 
