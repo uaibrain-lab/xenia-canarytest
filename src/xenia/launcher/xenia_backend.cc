@@ -54,7 +54,7 @@ LaunchResult XeniaBackend::Launch(const LaunchRequest& request) {
   return {true, "Jogo iniciado no Xenia."};
 }
 
-XeniaBackend::SessionState XeniaBackend::PollSession() {
+XeniaBackend::SessionState XeniaBackend::PollSession(bool terminate_on_exit) {
   if (session_ != SessionState::kRunning) {
     return session_;
   }
@@ -62,7 +62,11 @@ XeniaBackend::SessionState XeniaBackend::PollSession() {
     case Emulator::TitleThreadState::kRunning:
       break;
     case Emulator::TitleThreadState::kExited:
-      StopSession();
+      if (terminate_on_exit) {
+        StopSession();
+      } else {
+        session_ = SessionState::kStopped;
+      }
       break;
     default:
       session_ = SessionState::kFailed;

@@ -36,7 +36,8 @@ class XeniaBackend final : public RuntimeBackend {
   // These methods must run on the owning UI thread. kStopped means the
   // title has stopped, NOT that GPU/audio or the emulator is released.
   enum class SessionState { kIdle, kRunning, kStopped, kFailed };
-  SessionState PollSession();
+  // Embedded hosts may defer kernel cleanup to their release path.
+  SessionState PollSession(bool terminate_on_exit = true);
   bool StopSession();
 
  private:

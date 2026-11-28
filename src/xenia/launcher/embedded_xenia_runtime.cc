@@ -1,7 +1,9 @@
 // Released under the BSD license - see LICENSE in the root.
 #include "xenia/launcher/embedded_xenia_runtime.h"
 
+#include <chrono>
 #include <exception>
+#include <future>
 #include <utility>
 #include "xenia/apu/xaudio2/xaudio2_audio_system.h"
 #include "xenia/emulator.h"
@@ -93,7 +95,9 @@ XeniaBackend::SessionState EmbeddedXeniaRuntime::Tick(
   context_.Pump();
   if (!backend_) return XeniaBackend::SessionState::kIdle;
   window_.Tick(width, height, focused);
-  return backend_->PollSession();
+  // Report natural exit without terminating remaining guest threads on the UI.
+  // The ABI release call owns that cleanup and must precede host restoration.
+  return backend_->PollSession(false);
 }
 
 bool EmbeddedXeniaRuntime::Shutdown() {
@@ -102,9 +106,31 @@ bool EmbeddedXeniaRuntime::Shutdown() {
   // callbacks a second time after the guest and its window were released.
   if (released_) return true;
   if (emulator_) {
-    if (emulator_->is_title_open() &&
-        emulator_->TerminateTitle() != X_STATUS_SUCCESS)
-      return false;
+    if (emulator_->is_title_open()) {
+      // Kernel termination may wait for guest threads that have queued
+      // synchronous UI work. Keep the UI thread pumping those callbacks
+      // while a joined worker performs termination. No other emulator
+      // operation may run until the worker completes.
+      auto terminate = std::async(std::launch::async, [this]() {
+        return emulator_->TerminateTitle();
+      });
+      bool callback_failed = false;
+      while (terminate.wait_for(std::chrono::milliseconds(2)) !=
+             std::future_status::ready) {
+        try {
+          context_.Pump();
+        } catch (...) {
+          // Never abandon a live worker: future destruction would wait
+          // without pumping. Continue draining and report failure afterward.
+          callback_failed = true;
+          try {
+            context_.ExecutePendingFunctionsFromUIThread();
+          } catch (...) {}
+        }
+      }
+      if (terminate.get() != X_STATUS_SUCCESS || callback_failed)
+        return false;
+    }
     const auto state = emulator_->PollTitleThread();
     if (state == Emulator::TitleThreadState::kRunning ||
         state == Emulator::TitleThreadState::kWaitFailed)
