@@ -13,6 +13,30 @@
 #include "xenia/launcher/game_upload_contract.h"
 
 namespace xe::launcher {
+namespace {
+
+// Match the standalone setup thread while keeping the borrowed window's UI
+// context serviced. Always join before accessing or destroying guest state.
+template <typename Work>
+auto RunWithUIPump(EmbeddedAppContext& context, Work&& work) {
+  auto task = std::async(std::launch::async, std::forward<Work>(work));
+  std::exception_ptr callback_failure;
+  while (task.wait_for(std::chrono::milliseconds(2)) !=
+         std::future_status::ready) {
+    try {
+      // Drain unconditionally: a throwing deferred callback can leave more
+      // entries queued without a new pending notification.
+      context.ExecutePendingFunctionsFromUIThread();
+    } catch (...) {
+      if (!callback_failure) callback_failure = std::current_exception();
+    }
+  }
+  auto result = task.get();
+  if (callback_failure) std::rethrow_exception(callback_failure);
+  return result;
+}
+
+}  // namespace
 
 EmbeddedXeniaRuntime::EmbeddedXeniaRuntime(
     IUnknown* core_window, uint32_t width, uint32_t height,
@@ -58,7 +82,8 @@ LaunchResult EmbeddedXeniaRuntime::Launch(const LaunchRequest& request) {
     }
     emulator_ = std::make_unique<Emulator>(
         std::filesystem::path{}, storage_root_, content, cache, true);
-    const X_STATUS status = emulator_->Setup(
+    const X_STATUS status = RunWithUIPump(context_, [&]() {
+      return emulator_->Setup(
         &window_, nullptr, true, true,
         [](cpu::Processor* processor) {
           return apu::xaudio2::XAudio2AudioSystem::Create(processor);
@@ -69,6 +94,7 @@ LaunchResult EmbeddedXeniaRuntime::Launch(const LaunchRequest& request) {
           drivers.emplace_back(std::move(driver));
           return drivers;
         });
+    });
     if (status != X_STATUS_SUCCESS || !emulator_->graphics_system() ||
         !emulator_->graphics_system()->presenter()) {
       Shutdown();
@@ -111,25 +137,11 @@ bool EmbeddedXeniaRuntime::Shutdown() {
       // synchronous UI work. Keep the UI thread pumping those callbacks
       // while a joined worker performs termination. No other emulator
       // operation may run until the worker completes.
-      auto terminate = std::async(std::launch::async, [this]() {
-        return emulator_->TerminateTitle();
-      });
-      bool callback_failed = false;
-      while (terminate.wait_for(std::chrono::milliseconds(2)) !=
-             std::future_status::ready) {
-        try {
-          context_.Pump();
-        } catch (...) {
-          // Never abandon a live worker: future destruction would wait
-          // without pumping. Continue draining and report failure afterward.
-          callback_failed = true;
-          try {
-            context_.ExecutePendingFunctionsFromUIThread();
-          } catch (...) {}
-        }
-      }
-      if (terminate.get() != X_STATUS_SUCCESS || callback_failed)
+      if (RunWithUIPump(context_, [this]() {
+            return emulator_->TerminateTitle();
+          }) != X_STATUS_SUCCESS) {
         return false;
+      }
     }
     const auto state = emulator_->PollTitleThread();
     if (state == Emulator::TitleThreadState::kRunning ||
