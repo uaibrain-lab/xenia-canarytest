@@ -135,6 +135,7 @@ class Emulator {
   // ImGui drawer for various kinds of dialogs requested by the guest. Can be
   // null.
   ui::ImGuiDrawer* imgui_drawer() const { return imgui_drawer_; }
+  bool embedded_host() const { return embedded_host_; }
 
   void ShowCrashDialog(ui::CrashReport report);
 

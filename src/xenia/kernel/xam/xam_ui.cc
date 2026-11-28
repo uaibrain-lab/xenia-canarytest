@@ -41,6 +41,21 @@ constexpr std::chrono::milliseconds kUIDelayMillis(200);
 namespace xe {
 namespace kernel {
 namespace xam {
+// Embedded sessions can be destroyed and recreated in the same process.
+// Never let a delayed detached notification consult the global kernel after
+// its originating session has been destroyed.
+static void NotifySystemUIClosed() {
+  if (kernel_state()->emulator()->embedded_host()) {
+    kernel_state()->BroadcastNotification(kXNotificationSystemUI, false);
+    return;
+  }
+  std::thread thread([]() {
+    xe::threading::Sleep(kUIDelayMillis);
+    kernel_state()->BroadcastNotification(kXNotificationSystemUI, false);
+  });
+  thread.detach();
+}
+
 // Dialogs are drawn as soon as they're constructed, so they're created on the
 // UI thread together with their close callback.
 template <typename T>
@@ -125,13 +140,7 @@ X_RESULT xeXamDispatchDialog(std::function<T*()> create_dialog,
     kernel_state()->xam_state()->SetUIActive(false);
     return completion->result;
   };
-  auto post = []() {
-    std::jthread t([] {
-      xe::threading::Sleep(kUIDelayMillis);
-      kernel_state()->BroadcastNotification(kXNotificationSystemUI, false);
-    });
-    t.detach();
-  };
+  auto post = []() { NotifySystemUIClosed(); };
   if (!overlapped) {
     pre();
     auto result = run();
@@ -211,14 +220,7 @@ X_RESULT xeXamDispatchHeadless(std::function<X_RESULT()> run_callback,
     kernel_state()->BroadcastNotification(kXNotificationSystemUI, true);
     xe::threading::Sleep(std::chrono::milliseconds(25));
   };
-  auto post = []() {
-    std::jthread t([]() {
-      xe::threading::Sleep(kUIDelayMillis);
-      kernel_state()->BroadcastNotification(kXNotificationSystemUI, false);
-    });
-
-    t.detach();
-  };
+  auto post = []() { NotifySystemUIClosed(); };
   if (!overlapped) {
     pre();
     auto result = run_callback();
@@ -265,11 +267,7 @@ X_RESULT xeXamDispatchDialogAsync(std::function<T*()> create_dialog,
 
     kernel_state()->xam_state()->SetUIActive(false);
 
-    std::thread thread([]() {
-      xe::threading::Sleep(kUIDelayMillis);
-      kernel_state()->BroadcastNotification(kXNotificationSystemUI, false);
-    });
-    thread.detach();
+    NotifySystemUIClosed();
   };
 
   if (!xeXamShowDialog<T>(create_dialog, on_close)) {
@@ -284,20 +282,23 @@ X_RESULT xeXamDispatchDialogAsync(std::function<T*()> create_dialog,
 X_RESULT xeXamDispatchHeadlessAsync(std::function<void()> run_callback) {
   kernel_state()->BroadcastNotification(kXNotificationSystemUI, true);
 
-  auto display_window = kernel_state()->emulator()->display_window();
-  display_window->app_context().CallInUIThread([run_callback]() {
+  auto* emulator = kernel_state()->emulator();
+  auto* display_window = emulator->display_window();
+  auto complete = [run_callback]() {
     run_callback();
-
     kernel_state()->xam_state()->SetUIActive(false);
-
-    auto run = []() -> void {
-      xe::threading::Sleep(kUIDelayMillis);
-      kernel_state()->BroadcastNotification(kXNotificationSystemUI, false);
-    };
-
-    std::thread thread(run);
-    thread.detach();
-  });
+    NotifySystemUIClosed();
+  };
+  // Do not queue untracked work across the embedded session boundary.
+  const bool accepted = display_window &&
+      (emulator->embedded_host()
+           ? display_window->app_context().CallInUIThreadSynchronous(complete)
+           : display_window->app_context().CallInUIThread(complete));
+  if (!accepted) {
+    kernel_state()->xam_state()->SetUIActive(false);
+    kernel_state()->BroadcastNotification(kXNotificationSystemUI, false);
+    return X_ERROR_FUNCTION_FAILED;
+  }
 
   return X_ERROR_SUCCESS;
 }
