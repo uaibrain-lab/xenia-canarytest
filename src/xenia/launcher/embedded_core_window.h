@@ -30,6 +30,15 @@ class EmbeddedCoreWindow final : public ui::Window {
         width_(width), height_(height) {}
   ~EmbeddedCoreWindow() override { EnterDestructor(); }
 
+  // SetPresenter can accept a presenter even when no compatible Surface exists.
+  bool AttachPresenter(ui::Presenter* presenter) {
+    if (!presenter || phase() != Phase::kOpen) return false;
+    SetPresenter(presenter);
+    if (HasSurface()) return true;
+    SetPresenter(nullptr);
+    return false;
+  }
+
   // Called by the host on the owning thread with its current viewport/focus.
   // Surface dimensions are updated before notifying the presenter.
   void Tick(uint32_t width, uint32_t height, bool focused) {

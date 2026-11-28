@@ -26,7 +26,7 @@ EmbeddedXeniaRuntime::~EmbeddedXeniaRuntime() {
 bool EmbeddedXeniaRuntime::IsAvailable(std::string* reason) const {
   const char* error = nullptr;
   if (!context_.IsInUIThread()) error = "Xenia requires the host UI thread.";
-  else if (used_) error = "Create a new Xenia session for another title.";
+  else if (used_ || released_) error = "Create a new Xenia session for another title.";
   else if (!storage_root_.is_absolute()) error = "Invalid Xenia storage root.";
   else if (!gpu::d3d12::D3D12GraphicsSystem::IsAvailable())
     error = "D3D12 unavailable.";
@@ -73,7 +73,10 @@ LaunchResult EmbeddedXeniaRuntime::Launch(const LaunchRequest& request) {
       return {false, "Xenia setup/presenter failed: " +
                      std::to_string(static_cast<uint32_t>(status))};
     }
-    window_.SetPresenter(emulator_->graphics_system()->presenter());
+    if (!window_.AttachPresenter(emulator_->graphics_system()->presenter())) {
+      Shutdown();
+      return {false, "Xenia presenter cannot attach to the host CoreWindow."};
+    }
     backend_ = std::make_unique<XeniaBackend>(emulator_.get());
     auto result = backend_->Launch(request);
     if (!result.started) Shutdown();
@@ -95,6 +98,9 @@ XeniaBackend::SessionState EmbeddedXeniaRuntime::Tick(
 
 bool EmbeddedXeniaRuntime::Shutdown() {
   if (!context_.IsInUIThread()) return false;
+  // The C ABI calls Shutdown before delete; the destructor must not drain
+  // callbacks a second time after the guest and its window were released.
+  if (released_) return true;
   if (emulator_) {
     if (emulator_->is_title_open() &&
         emulator_->TerminateTitle() != X_STATUS_SUCCESS)
@@ -105,16 +111,19 @@ bool EmbeddedXeniaRuntime::Shutdown() {
       return false;
   }
   ReleaseRuntime();
+  released_ = true;
   return true;
 }
 
 void EmbeddedXeniaRuntime::ReleaseRuntime() {
   context_.ExecutePendingFunctionsFromUIThread();
   window_.SetPresenter(nullptr);
+  // Close the borrowed wrapper while its listeners are still alive. This
+  // only closes the Xenia wrapper, not the host CoreWindow.
+  window_.RequestClose();
   backend_.reset();
   emulator_.reset();
   context_.ExecutePendingFunctionsFromUIThread();
-  window_.RequestClose();
 }
 
 }  // namespace xe::launcher

@@ -31,6 +31,7 @@ class EmbeddedXeniaRuntime final : public RuntimeBackend {
   std::unique_ptr<Emulator> emulator_;
   std::unique_ptr<XeniaBackend> backend_;
   bool used_ = false;
+  bool released_ = false;
 };
 
 }  // namespace xe::launcher
