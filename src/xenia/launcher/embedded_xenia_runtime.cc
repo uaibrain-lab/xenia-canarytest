@@ -106,7 +106,11 @@ LaunchResult EmbeddedXeniaRuntime::Launch(const LaunchRequest& request) {
       return {false, "Xenia presenter cannot attach to the host CoreWindow."};
     }
     backend_ = std::make_unique<XeniaBackend>(emulator_.get());
-    auto result = backend_->Launch(request);
+    // Mount and inspect the title on a worker. CompleteLaunch explicitly
+    // dispatches its UI-affine portion back through the app context.
+    auto result = RunWithUIPump(context_, [&]() {
+      return backend_->Launch(request);
+    });
     if (!result.started) Shutdown();
     return result;
   } catch (const std::exception& error) {

@@ -21,7 +21,9 @@ namespace launcher {
 //  - `emulator` was constructed AND Emulator::Setup() already succeeded, with
 //    the window/graphics/audio/input factories of the target platform. On
 //    Xbox UWP those platform pieces do not exist yet in this tree.
-//  - Launch() is called on the thread that owns the emulator (UI thread).
+//  - Launch() is serialized against polling and shutdown. The caller may
+//    use a worker if the owning UI thread services the app context until
+//    Launch() returns (CompleteLaunch dispatches synchronously to the UI).
 // The Emulator is not owned and must outlive this backend.
 class XeniaBackend final : public RuntimeBackend {
  public:
