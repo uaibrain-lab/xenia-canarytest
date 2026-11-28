@@ -23,6 +23,9 @@ class XamDialog : public xe::ui::ImGuiDialog {
   void set_close_callback(std::function<void()> close_callback) {
     close_callback_ = close_callback;
   }
+  void set_shutdown_callback(std::function<void()> callback) {
+    shutdown_callback_ = std::move(callback);
+  }
 
  protected:
   XamDialog(xe::ui::ImGuiDrawer* imgui_drawer)
@@ -36,8 +39,13 @@ class XamDialog : public xe::ui::ImGuiDialog {
     }
   }
 
+  void OnCancelForShutdown() override {
+    if (shutdown_callback_) shutdown_callback_();
+  }
+
  private:
   std::function<void()> close_callback_ = nullptr;
+  std::function<void()> shutdown_callback_;
 };
 
 bool xeDrawProfileContent(xe::ui::ImGuiDrawer* imgui_drawer,

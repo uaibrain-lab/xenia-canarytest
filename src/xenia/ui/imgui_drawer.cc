@@ -807,6 +807,14 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
   }
 }
 
+void ImGuiDrawer::CancelOwnedDialogsForShutdown() {
+  assert_true(!IsDrawingDialogs());
+  accepts_guest_dialogs_ = false;
+  while (!dialogs_.empty()) {
+    dialogs_.back()->CancelForShutdown();
+  }
+}
+
 void ImGuiDrawer::ClearDialogs() {
   size_t dialog_loop = 0;
 

@@ -34,6 +34,9 @@ class ImGuiDialog {
 
   void Draw();
 
+  // Only for self-owned dialogs, on the UI thread outside Draw().
+  void CancelForShutdown();
+
   bool IsClosing() const { return has_close_pending_; }
 
  protected:
@@ -48,6 +51,7 @@ class ImGuiDialog {
 
   virtual void OnShow() {}
   virtual void OnClose() {}
+  virtual void OnCancelForShutdown() {}
   virtual void OnDraw(ImGuiIO& io) {}
 
  private:

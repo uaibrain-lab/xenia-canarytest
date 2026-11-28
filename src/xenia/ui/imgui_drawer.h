@@ -74,6 +74,9 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
   void Draw(UIDrawContext& ui_draw_context) override;
 
   void ClearDialogs();
+  // Dedicated self-owned guest drawer only; never use on externally owned UI.
+  void CancelOwnedDialogsForShutdown();
+  bool AcceptsGuestDialogs() const { return accepts_guest_dialogs_; }
   void EnableNotifications(bool enable) { are_notifications_enabled_ = enable; }
 
   std::unique_ptr<ImmediateTexture> LoadImGuiIcon(
@@ -189,6 +192,7 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
   uint64_t last_frame_time_ticks_;
 
   bool are_notifications_enabled_ = true;
+  bool accepts_guest_dialogs_ = true;
 
   float font_size_ = 0.0f;
 };

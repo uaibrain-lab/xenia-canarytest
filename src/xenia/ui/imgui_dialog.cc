@@ -37,6 +37,12 @@ void ImGuiDialog::Then(xe::threading::Fence* fence) {
 
 void ImGuiDialog::Close() { has_close_pending_ = true; }
 
+void ImGuiDialog::CancelForShutdown() {
+  // Cancellation is not a button press. The destructor wakes all fences.
+  OnCancelForShutdown();
+  delete this;
+}
+
 ImGuiIO& ImGuiDialog::GetIO() { return imgui_drawer()->GetIO(); }
 
 void ImGuiDialog::Draw() {

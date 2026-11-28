@@ -61,7 +61,8 @@ static void NotifySystemUIClosed() {
 template <typename T>
 bool xeXamShowDialog(const std::function<T*()>& create_dialog,
                      std::function<void(T*)> close_callback,
-                     xe::threading::Fence* closed_fence = nullptr) {
+                     xe::threading::Fence* closed_fence = nullptr,
+                     std::function<void()> shutdown_callback = {}) {
   auto* emulator = kernel_state()->emulator();
   // The embedded runtime has a real presenter but no standalone ImGui drawer.
   // Never construct a dialog that would dereference that missing drawer.
@@ -72,8 +73,11 @@ bool xeXamShowDialog(const std::function<T*()>& create_dialog,
   xe::ui::WindowedAppContext& app_context =
       emulator->display_window()->app_context();
 
-  return app_context.CallInUIThreadSynchronous([&]() {
+  bool shown = false;
+  const bool dispatched = app_context.CallInUIThreadSynchronous([&]() {
+    if (!emulator->imgui_drawer()->AcceptsGuestDialogs()) return;
     T* dialog = create_dialog();
+    dialog->set_shutdown_callback(std::move(shutdown_callback));
     dialog->set_close_callback(
         [dialog, close_callback]() { close_callback(dialog); });
 
@@ -82,7 +86,9 @@ bool xeXamShowDialog(const std::function<T*()>& create_dialog,
     if (closed_fence) {
       dialog->Then(closed_fence);
     }
+    shown = true;
   });
+  return dispatched && shown;
 }
 
 // TODO(gibbed): This is all one giant WIP that seems to work better than the
@@ -118,7 +124,9 @@ X_RESULT xeXamDispatchDialog(std::function<T*()> create_dialog,
       [completion, close_callback](T* dialog) {
         completion->result = close_callback(dialog);
       },
-      &completion->closed);
+      &completion->closed, [completion]() {
+        completion->result = X_ERROR_CANCELLED;
+      });
 
   if (!shown) {
     kernel_state()->xam_state()->SetUIActive(false);
@@ -172,7 +180,11 @@ X_RESULT xeXamDispatchDialogEx(
         completion->result = close_callback(dialog, completion->extended_error,
                                             completion->length);
       },
-      &completion->closed);
+      &completion->closed, [completion]() {
+        completion->result = X_ERROR_CANCELLED;
+        completion->extended_error = X_ERROR_CANCELLED;
+        completion->length = 0;
+      });
 
   if (!shown) {
     kernel_state()->xam_state()->SetUIActive(false);
@@ -270,7 +282,10 @@ X_RESULT xeXamDispatchDialogAsync(std::function<T*()> create_dialog,
     NotifySystemUIClosed();
   };
 
-  if (!xeXamShowDialog<T>(create_dialog, on_close)) {
+  if (!xeXamShowDialog<T>(create_dialog, on_close, nullptr, []() {
+        kernel_state()->xam_state()->SetUIActive(false);
+        NotifySystemUIClosed();
+      })) {
     kernel_state()->xam_state()->SetUIActive(false);
     kernel_state()->BroadcastNotification(kXNotificationSystemUI, false);
     return X_ERROR_FUNCTION_FAILED;
