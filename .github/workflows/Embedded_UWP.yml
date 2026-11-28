@@ -83,6 +83,8 @@ jobs:
         run: |
           $dll = "build-embedded-uwp/embedded-xenia/Release/uaibrain_xenia_embedded.dll"
           if (!(Test-Path $dll)) { throw "Embedded DLL missing" }
+          $implib = "build-embedded-uwp/embedded-xenia/Release/uaibrain_xenia_embedded.lib"
+          if (!(Test-Path $implib -PathType Leaf)) { throw "Embedded import library missing" }
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Sort-Object FullName | Select-Object -Last 1
@@ -95,12 +97,13 @@ jobs:
           Copy-Item LICENSE build-embedded-uwp/embedded-xenia/Release/LICENSE
           git rev-parse HEAD | Set-Content build-embedded-uwp/embedded-xenia/Release/source-revision.txt
 
-      - name: Upload development DLL only
+      - name: Upload development runtime and import library
         uses: actions/upload-artifact@v7
         with:
           name: embedded-xenia-uwp-x64
           path: |
             build-embedded-uwp/embedded-xenia/Release/*.dll
+            build-embedded-uwp/embedded-xenia/Release/uaibrain_xenia_embedded.lib
             build-embedded-uwp/embedded-xenia/Release/LICENSE
             build-embedded-uwp/embedded-xenia/Release/source-revision.txt
           if-no-files-found: error
