@@ -343,6 +343,7 @@ class Emulator {
   X_STATUS CompleteLaunch(const std::filesystem::path& path,
                           const std::string_view module_path);
 
+  const bool embedded_host_;
   std::filesystem::path command_line_;
   std::filesystem::path storage_root_;
   std::filesystem::path content_root_;

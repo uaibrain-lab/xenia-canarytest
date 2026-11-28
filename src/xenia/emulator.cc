@@ -117,6 +117,7 @@ Emulator::Emulator(const std::filesystem::path& command_line,
     : on_launch(),
       on_terminate(),
       on_exit(),
+      embedded_host_(embedded_host),
       command_line_(command_line),
       storage_root_(storage_root),
       content_root_(content_root),
@@ -1697,7 +1698,7 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
   // Making changes to the UI (setting the icon) and executing game config
   // load callbacks which expect to be called from the UI thread.
   // If not on UI thread, dispatch to it synchronously.
-  if (!display_window_->app_context().IsInUIThread()) {
+  if (!embedded_host_ && !display_window_->app_context().IsInUIThread()) {
     X_STATUS result = X_STATUS_UNSUCCESSFUL;
     display_window_->app_context().CallInUIThreadSynchronous(
         [this, &path, &module_path, &result]() {
@@ -1705,6 +1706,14 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
         });
     return result;
   }
+
+  // The embedded caller joins its launch worker while pumping this context.
+  // Keep only UI-affine work here; mounting, module loading and guest setup
+  // stay on the worker. Standalone retains its original whole-launch dispatch.
+  auto run_ui = [this](auto&& operation) {
+    return display_window_->app_context().CallInUIThreadSynchronous(
+        std::forward<decltype(operation)>(operation));
+  };
 
   // Setup NullDevices for raw HDD partition accesses
   // Cache/STFC code baked into games tries reading/writing to these
@@ -1729,7 +1738,8 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
   title_id_ = std::nullopt;
   title_name_ = "";
   title_version_ = "";
-  display_window_->SetIcon(nullptr, 0);
+  if (!run_ui([this]() { display_window_->SetIcon(nullptr, 0); }))
+    return X_STATUS_UNSUCCESSFUL;
 
   // Allow xam to request module loads.
   auto xam = kernel_state()->GetKernelModule<kernel::xam::XamModule>("xam.xex");
@@ -1786,15 +1796,22 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
 
     // Load the per-game configuration file and make sure updates are handled
     // by the callbacks.
-    config::LoadGameConfig(title_id);
-    assert_true(game_config_load_callback_loop_next_index_ == SIZE_MAX);
-    game_config_load_callback_loop_next_index_ = 0;
-    while (game_config_load_callback_loop_next_index_ <
-           game_config_load_callbacks_.size()) {
-      game_config_load_callbacks_[game_config_load_callback_loop_next_index_++]
-          ->PostGameConfigLoad();
-    }
-    game_config_load_callback_loop_next_index_ = SIZE_MAX;
+    if (!run_ui([this, &title_id]() {
+          config::LoadGameConfig(title_id);
+          assert_true(game_config_load_callback_loop_next_index_ == SIZE_MAX);
+          game_config_load_callback_loop_next_index_ = 0;
+          try {
+            while (game_config_load_callback_loop_next_index_ <
+                   game_config_load_callbacks_.size()) {
+              game_config_load_callbacks_[game_config_load_callback_loop_next_index_++]
+                  ->PostGameConfigLoad();
+            }
+          } catch (...) {
+            game_config_load_callback_loop_next_index_ = SIZE_MAX;
+            throw;
+          }
+          game_config_load_callback_loop_next_index_ = SIZE_MAX;
+        })) return X_STATUS_UNSUCCESSFUL;
 
     const auto db = kernel_state_->module_xdbf(module);
 
@@ -1937,7 +1954,9 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
 
       auto icon_block = game_info_database_->GetIcon();
       if (!icon_block.empty()) {
-        display_window_->SetIcon(icon_block.data(), icon_block.size());
+        if (!run_ui([this, &icon_block]() {
+              display_window_->SetIcon(icon_block.data(), icon_block.size());
+            })) return X_STATUS_UNSUCCESSFUL;
       }
     }
   }
@@ -1948,7 +1967,8 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
   // skipped until pipelines are ready, so this is safe. By the time actual
   // gameplay starts, most cached pipelines should be compiled.
   if (graphics_system_) {
-    on_shader_storage_initialization(true);
+    if (!run_ui([this]() { on_shader_storage_initialization(true); }))
+      return X_STATUS_UNSUCCESSFUL;
     graphics_system_->InitializeShaderStorage(
         cache_root_, title_id_.value(), false,
         [this]() { on_shader_storage_initialization(false); });
@@ -1959,7 +1979,8 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
     return X_STATUS_UNSUCCESSFUL;
   }
   main_thread_ = main_thread;
-  on_launch(title_id_.value(), title_name_);
+  if (!run_ui([this]() { on_launch(title_id_.value(), title_name_); }))
+    return X_STATUS_UNSUCCESSFUL;
 
   // Plugins must be loaded after calling LaunchModule() and
   // FinishLoadingUserModule() which will apply TUs and patching to the main
