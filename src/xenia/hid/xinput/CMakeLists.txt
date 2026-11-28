@@ -1,4 +1,8 @@
 add_library(xenia-hid-xinput STATIC)
 xe_platform_sources(xenia-hid-xinput ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(xenia-hid-xinput PUBLIC xenia-base xenia-hid)
+if(CMAKE_SYSTEM_NAME STREQUAL "WindowsStore")
+  target_compile_definitions(xenia-hid-xinput PRIVATE XENIA_XINPUT_UWP=1)
+  target_link_libraries(xenia-hid-xinput PUBLIC XInput.lib)
+endif()
 xe_target_defaults(xenia-hid-xinput)

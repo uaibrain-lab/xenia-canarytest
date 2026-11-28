@@ -34,7 +34,9 @@ XInputInputDriver::XInputInputDriver(xe::ui::Window* window,
 
 XInputInputDriver::~XInputInputDriver() {
   if (module_) {
+#if !defined(XENIA_XINPUT_UWP)
     FreeLibrary((HMODULE)module_);
+#endif
     module_ = nullptr;
     XInputGetCapabilities_ = nullptr;
     XInputGetState_ = nullptr;
@@ -46,6 +48,16 @@ XInputInputDriver::~XInputInputDriver() {
 }
 
 X_STATUS XInputInputDriver::Setup() {
+  if (XInputGetState_) return X_STATUS_SUCCESS;
+#if defined(XENIA_XINPUT_UWP)
+  // The Store SDK exposes XInput 1.4 as an import library. Avoid desktop
+  // LoadLibrary and the undocumented guide-button ordinal in AppContainer.
+  XInputGetCapabilities_ = reinterpret_cast<void*>(&::XInputGetCapabilities);
+  XInputGetState_ = reinterpret_cast<void*>(&::XInputGetState);
+  XInputGetKeystroke_ = reinterpret_cast<void*>(&::XInputGetKeystroke);
+  XInputSetState_ = reinterpret_cast<void*>(&::XInputSetState);
+  return X_STATUS_SUCCESS;
+#else
   HMODULE module = LoadLibraryW(L"xinput1_4.dll");
   if (!module) {
     return X_STATUS_DLL_NOT_FOUND;
@@ -80,12 +92,14 @@ X_STATUS XInputInputDriver::Setup() {
   XInputEnable_ = xie;
 
   return X_STATUS_SUCCESS;
+#endif
 }
 
 constexpr uint64_t SKIP_INVALID_CONTROLLER_TIME = 1100;
 static uint64_t last_invalid_time[4];
 
 static DWORD should_skip(uint32_t user_index) {
+  if (user_index >= XUSER_MAX_COUNT) return ERROR_DEVICE_NOT_CONNECTED;
   uint64_t time = last_invalid_time[user_index];
   if (time) {
     uint64_t deltatime = xe::Clock::QueryHostUptimeMillis() - time;
@@ -99,6 +113,7 @@ static DWORD should_skip(uint32_t user_index) {
 }
 
 static void set_skip(uint32_t user_index) {
+  if (user_index >= XUSER_MAX_COUNT) return;
   last_invalid_time[user_index] = xe::Clock::QueryHostUptimeMillis();
 }
 
@@ -152,7 +167,8 @@ X_RESULT XInputInputDriver::GetState(uint32_t user_index,
 
   // If the guide button is enabled use XInputGetStateEx, otherwise use the
   // default XInputGetState.
-  auto xigs = cvars::guide_button ? (decltype(&XInputGetState))XInputGetStateEx_
+  auto xigs = cvars::guide_button && XInputGetStateEx_
+                  ? (decltype(&XInputGetState))XInputGetStateEx_
                                   : (decltype(&XInputGetState))XInputGetState_;
 
   DWORD result = xigs(user_index, &native_state.state);
@@ -207,6 +223,7 @@ X_RESULT XInputInputDriver::GetKeystroke(uint32_t user_index, uint32_t flags,
   // If any user (0xFF) is polled this bug does not occur but GetCapabilities
   // would fail so we need to skip it.
   if (user_index != XUserIndexAny) {
+    if (user_index >= XUSER_MAX_COUNT) return ERROR_DEVICE_NOT_CONNECTED;
     XINPUT_CAPABILITIES caps;
     auto xigc = (decltype(&XInputGetCapabilities))XInputGetCapabilities_;
     result = xigc(user_index, 0, &caps);
