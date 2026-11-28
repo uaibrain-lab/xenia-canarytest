@@ -1029,6 +1029,33 @@ X_RESULT xeXamShowSigninUI(uint32_t user_index, uint32_t users_needed,
     return X_ERROR_INVALID_PARAMETER;
   }
 
+  if (!cvars::headless && !kernel_state()->emulator()->imgui_drawer()) {
+    // The embedded host has no profile picker yet. Preserve actual signed-in
+    // profiles and notify the title of their current slots. Do not create
+    // accounts, switch users or claim that a sign-in occurred when none did.
+    uint32_t count = 0;
+    uint32_t slots_mask = 0;
+    for (uint32_t i = 0; i < XUserMaxUserCount; ++i) {
+      if (kernel_state()->xam_state()->GetUserProfile(i)) {
+        ++count;
+        slots_mask |= 1u << i;
+      }
+    }
+    if (count < users_needed ||
+        (user_index != XUserIndexAny &&
+         (user_index >= XUserMaxUserCount ||
+          !(slots_mask & (1u << user_index))))) {
+      return X_ERROR_NO_SUCH_USER;
+    }
+    // The selected accounts already exist and are signed in. Avoid re-login,
+    // delayed detached callbacks and any changes to persistent profile data.
+    kernel_state()->BroadcastNotification(kXNotificationSystemUI, true);
+    kernel_state()->BroadcastNotification(kXNotificationSystemSignInChanged,
+                                          slots_mask);
+    kernel_state()->BroadcastNotification(kXNotificationSystemUI, false);
+    return X_ERROR_SUCCESS;
+  }
+
   if (cvars::headless) {
     return xeXamDispatchHeadlessAsync([users_needed]() {
       std::map<uint8_t, uint64_t> xuids;
