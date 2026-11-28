@@ -22,6 +22,8 @@ class EmbeddedXeniaRuntime final : public RuntimeBackend {
   XeniaBackend::SessionState Tick(uint32_t width, uint32_t height, bool focused);
   // False retains the running runtime; do not restore the host swap chain.
   bool Shutdown();
+  // Pre-boot only: 0 = engine default, 30 or 60 = guest frame pacing.
+  bool SetFrameLimit(uint32_t fps);
 
  private:
   void ReleaseRuntime();
@@ -30,6 +32,7 @@ class EmbeddedXeniaRuntime final : public RuntimeBackend {
   std::filesystem::path storage_root_;
   std::unique_ptr<Emulator> emulator_;
   std::unique_ptr<XeniaBackend> backend_;
+  bool frame_limit_overridden_ = false;
   bool used_ = false;
   bool released_ = false;
 };

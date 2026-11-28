@@ -65,6 +65,10 @@ class CommandVar : virtual public ICommandVar {
   void AddToLaunchOptions(cxxopts::Options* options) override;
   void LoadFromLaunchOptions(cxxopts::ParseResult* result) override;
   void SetCommandLineValue(T val);
+  void ClearCommandLineValue() {
+    commandline_value_.reset();
+    UpdateValue();
+  }
   T* current_value() { return current_value_; }
 
  protected:

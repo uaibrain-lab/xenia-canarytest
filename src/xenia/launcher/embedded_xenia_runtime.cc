@@ -8,6 +8,7 @@
 #include "xenia/apu/xaudio2/xaudio2_audio_system.h"
 #include "xenia/emulator.h"
 #include "xenia/gpu/d3d12/d3d12_graphics_system.h"
+#include "xenia/gpu/gpu_flags.h"
 #include "xenia/hid/input_driver.h"
 #include "xenia/hid/xinput/xinput_hid.h"
 #include "xenia/launcher/game_upload_contract.h"
@@ -36,6 +37,14 @@ auto RunWithUIPump(EmbeddedAppContext& context, Work&& work) {
   return result;
 }
 
+cvar::ConfigVar<uint64_t>* FrameLimitCvar() {
+  if (!cvar::ConfigVars) return nullptr;
+  const auto it = cvar::ConfigVars->find("framerate_limit");
+  return it == cvar::ConfigVars->end()
+             ? nullptr
+             : dynamic_cast<cvar::ConfigVar<uint64_t>*>(it->second);
+}
+
 }  // namespace
 
 EmbeddedXeniaRuntime::EmbeddedXeniaRuntime(
@@ -58,6 +67,23 @@ bool EmbeddedXeniaRuntime::IsAvailable(std::string* reason) const {
     error = "D3D12 unavailable.";
   if (error && reason) *reason = error;
   return !error;
+}
+
+bool EmbeddedXeniaRuntime::SetFrameLimit(uint32_t fps) {
+  if (!context_.IsInUIThread() || used_ || released_ ||
+      (fps != 0 && fps != 30 && fps != 60)) return false;
+  auto* setting = FrameLimitCvar();
+  if (!setting) return false;
+  if (fps == 0) {
+    if (frame_limit_overridden_) setting->ClearCommandLineValue();
+    frame_limit_overridden_ = false;
+  } else {
+    // The frame limiter captures this value during graphics initialization.
+    // Command-line precedence prevents a later title config from changing it.
+    setting->SetCommandLineValue(fps);
+    frame_limit_overridden_ = true;
+  }
+  return true;
 }
 
 LaunchResult EmbeddedXeniaRuntime::Launch(const LaunchRequest& request) {
@@ -165,6 +191,10 @@ void EmbeddedXeniaRuntime::ReleaseRuntime() {
   window_.RequestClose();
   backend_.reset();
   emulator_.reset();
+  if (frame_limit_overridden_) {
+    if (auto* setting = FrameLimitCvar()) setting->ClearCommandLineValue();
+    frame_limit_overridden_ = false;
+  }
   context_.ExecutePendingFunctionsFromUIThread();
 }
 
@@ -189,6 +219,18 @@ __declspec(dllexport) void* uaibrain_xenia_core_create_v1(
         core_window, width, height, std::filesystem::path(storage_root));
   } catch (...) {
     return nullptr;
+  }
+}
+
+// Optional additive ABI extension, no change to the five original exports.
+__declspec(dllexport) int uaibrain_xenia_core_set_frame_limit_v1(
+    void* handle, uint32_t fps) noexcept {
+  if (!handle) return 0;
+  try {
+    return static_cast<xe::launcher::EmbeddedXeniaRuntime*>(handle)
+                   ->SetFrameLimit(fps) ? 1 : 0;
+  } catch (...) {
+    return 0;
   }
 }
 
