@@ -9,6 +9,8 @@
 
 #include "xenia/ui/windowed_app_context.h"
 
+#include <exception>
+
 #include "xenia/base/assert.h"
 #include "xenia/base/threading.h"
 
@@ -97,13 +99,22 @@ bool WindowedAppContext::CallInUIThreadSynchronous(
     return true;
   }
   xe::threading::Fence fence;
-  if (!CallInUIThreadDeferred([&function, &fence]() {
-        function();
+  std::exception_ptr failure;
+  if (!CallInUIThreadDeferred([&function, &fence, &failure]() {
+        // A throwing UI callback must still wake its waiting caller. In
+        // particular, embedded setup/teardown cannot leave a worker blocked
+        // forever while the host unwinds the UI loop.
+        try {
+          function();
+        } catch (...) {
+          failure = std::current_exception();
+        }
         fence.Signal();
       })) {
     return false;
   }
   fence.Wait();
+  if (failure) std::rethrow_exception(failure);
   return true;
 }
 
